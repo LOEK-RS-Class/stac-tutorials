@@ -200,68 +200,6 @@ for (d in acq_dates) {
 
 
 
-## Copernicus Data Space Ecosystem - CDSE
-
-Here I will use the Coperniucus Dataspace Ecosystem (CDSE) to acquire Sentinel-2 images. A full overview of the data available at CDSE is provided here: [https://browser.stac.dataspace.copernicus.eu/?.language=en](https://browser.stac.dataspace.copernicus.eu/?.language=en).
-
-```{r}
-stac_source <- rstac::stac(
-  "https://stac.dataspace.copernicus.eu/v1/"
-)
-
-
-items <- rstac::stac_search(
-  q = stac_source,
-  collections = "sentinel-2-l2a",
-  datetime = timespan,
-  bbox = aoi_bbox,
-  limit = 1
-) |>
-  post_request()
-
-
-items$features[[1]]
-
-
-assets_download(items)
-
-
-
-```
-
-
-
-
-
-
-
-## Using the rsi package
-
-
-```{r}
-#| label: rsi
-
-library(rsi)
-
-
-test <- rsi::get_stac_data(
-  # Spatial AOI:
-  aoi = aoi,
-  # Temporal AOI:
-  start_date = "2025-05-01",
-  end_date = "2025-05-31",
-  # Which asset do we want, from which collection, from which API:
-  stac_source = "https://planetarycomputer.microsoft.com/api/stac/v1/",
-  collection = "sentinel-2-l2a",
-  asset_names = c("B04", "B08"),
-  # Where to save the file:
-  output_filename = "goreangab_demo.tif",
-  limit = 2,
-  composite_function = NULL
-  
-)
-```
-
 
 
 
