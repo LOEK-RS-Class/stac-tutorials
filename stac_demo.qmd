@@ -1,0 +1,267 @@
+---
+title: "Getting Satellite Data with STAC"
+format: html
+---
+
+
+
+## What is STAC?
+
+STAC - **SpatioTemporal Asset Catalogs** is a API where data providers implement a structured access to their products.
+
+
+Tutorial tutorial is heavily inspired (i.e. copied and adapted) from:
+
+- [https://stacspec.org/en/tutorials/1-download-data-using-r/](https://stacspec.org/en/tutorials/1-download-data-using-r/)
+- [https://appelmar.github.io/ogh2021/tutorial.html#Introduction](https://appelmar.github.io/ogh2021/tutorial.html#Introduction)
+
+```{r}
+#| label: packages
+
+# install.packages("rstac")
+# install.packages("sf")
+# install.packages("terra")
+# install.packages("tidyverse")
+# install.packages("gdalcubes")
+# install.packages("mapview")
+
+library(sf)
+library(terra)
+library(rstac)
+library(tidyverse)
+library(gdalcubes)
+library(mapview)
+mapviewOptions(basemaps = "OpenStreetMap")
+```
+
+In order to query satellite data, we need to define a spatial extent and the time range we want data from.
+
+```{r}
+#| label: area of interests
+
+aoi <- st_read("data/aoi/aoi_goreangab.geojson")
+mapview(aoi, col.regions = "white", color = "black", alpha = 1)
+
+# specific format for bounding box and time
+aoi_bbox <- aoi |> st_bbox() |> as.vector()
+timespan <- "2025-05-01T00:00:00Z/2025-05-30T23:59:59Z"
+```
+
+
+
+## rstac and gdalcubes
+
+
+### Microsoft Planetary Computer
+
+Stac Collection of the Microsoft Planetary Computer: [https://planetarycomputer.microsoft.com/catalog](https://planetarycomputer.microsoft.com/catalog)
+
+```{r}
+#| label: Microsoft Collections
+
+stac_source <- rstac::stac(
+  "https://planetarycomputer.microsoft.com/api/stac/v1/"
+)
+
+
+rstac::get_request(stac_source)
+
+collections_query <- stac_source |>
+  rstac::collections()
+
+collections_query
+available_collections <- rstac::get_request(collections_query)
+available_collections$collections
+
+
+```
+
+
+
+- Example data: Harmonised Landsat Sentinel 2 (hls) to get Sentinel data in 30m spatial resolution
+- [https://planetarycomputer.microsoft.com/dataset/hls2-s30](https://planetarycomputer.microsoft.com/dataset/hls2-s30)
+
+
+```{r}
+#| label: Microsoft S2
+
+
+items <- rstac::stac_search(
+  q = stac_source,
+  collections = "hls2-s30",
+  datetime = "2025-05-01/2025-05-30",
+  bbox = aoi_bbox,
+  limit = 30
+) |> ext_query("eo:cloud_cover" < 80)
+items = post_request(items)
+items
+
+items <- items_sign_planetary_computer(items)
+
+```
+
+
+
+```{r}
+#| label: explore items
+
+items_datetime(items)
+items_bbox(items)
+items_assets(items)
+```
+
+
+
+## Create the actual image collection from the items
+
+```{r}
+#| label: Stac Image Collection
+
+
+wanted_assets = items_assets(items)[1:14]
+
+collection_s2 = stac_image_collection(items$features, asset_names = wanted_assets)
+collection_s2
+
+```
+
+
+
+## gdalcubes to access only the aoi
+
+
+- UTM Zone of Namibia is 33S, EPSG:32733
+- Here we define a data_cube. Think of it like an empty template where we put data in.
+
+```{r}
+#| label: gdalcubes datacube definition
+
+
+cube_box <- aoi |> st_transform(32733) |> st_bbox()
+
+spatiotemporal_extent <- list(
+  t0 = "2025-05-01",
+  t1 = "2025-05-30",
+  left = cube_box["xmin"],
+  right = cube_box["xmax"],
+  bottom = cube_box["ymin"],
+  top = cube_box["ymax"]
+)
+
+
+v <- gdalcubes::cube_view(
+  srs = "EPSG:32733",
+  extent = spatiotemporal_extent,
+  dx = 30,
+  dy = 30,
+  dt = "P1D",
+  aggregation = "first",
+  resampling = "near"
+)
+v
+
+
+```
+
+
+
+```{r}
+#| label: download the cube
+
+cu = raster_cube(collection_s2, v)
+cu
+```
+
+
+### Output
+
+Here we write out the individual composites
+
+
+```{r}
+#| label: writeOut
+#| eval: FALSE
+
+acq_dates = items_datetime(items) |> substr(1, 10) |>
+  unique() |>
+  sort()
+
+
+dir.create("temp")
+# write the time slices with actual images out
+for (d in acq_dates) {
+  cu |>
+    slice_time(datetime = d) |>
+    write_tif(dir = "temp/", prefix = "HLS_S30_", COG = TRUE)
+}
+```
+
+
+
+
+
+## Copernicus Data Space Ecosystem - CDSE
+
+Here I will use the Coperniucus Dataspace Ecosystem (CDSE) to acquire Sentinel-2 images. A full overview of the data available at CDSE is provided here: [https://browser.stac.dataspace.copernicus.eu/?.language=en](https://browser.stac.dataspace.copernicus.eu/?.language=en).
+
+```{r}
+stac_source <- rstac::stac(
+  "https://stac.dataspace.copernicus.eu/v1/"
+)
+
+
+items <- rstac::stac_search(
+  q = stac_source,
+  collections = "sentinel-2-l2a",
+  datetime = timespan,
+  bbox = aoi_bbox,
+  limit = 1
+) |>
+  post_request()
+
+
+items$features[[1]]
+
+
+assets_download(items)
+
+
+
+```
+
+
+
+
+
+
+
+## Using the rsi package
+
+
+```{r}
+#| label: rsi
+
+library(rsi)
+
+
+test <- rsi::get_stac_data(
+  # Spatial AOI:
+  aoi = aoi,
+  # Temporal AOI:
+  start_date = "2025-05-01",
+  end_date = "2025-05-31",
+  # Which asset do we want, from which collection, from which API:
+  stac_source = "https://planetarycomputer.microsoft.com/api/stac/v1/",
+  collection = "sentinel-2-l2a",
+  asset_names = c("B04", "B08"),
+  # Where to save the file:
+  output_filename = "goreangab_demo.tif",
+  limit = 2,
+  composite_function = NULL
+  
+)
+```
+
+
+
+
